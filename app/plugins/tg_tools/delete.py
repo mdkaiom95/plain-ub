@@ -1,5 +1,4 @@
-from app import BOT, bot
-from app.core import Message
+from app import BOT, Message, bot
 from app.plugins.tg_tools.get_message import parse_link
 
 
@@ -13,7 +12,7 @@ async def delete_message(bot: BOT, message: Message) -> None:
         .del | .del -r t.me/......
     """
     if "-r" in message.flags:
-        chat_id, message_id = parse_link(message.flt_input)
+        chat_id, message_id = parse_link(message.filtered_input)
         await bot.delete_messages(chat_id=chat_id, message_ids=message_id, revoke=True)
         return
     await message.delete(reply=True)

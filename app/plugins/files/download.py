@@ -2,11 +2,11 @@ import asyncio
 import os
 import time
 
-from app import BOT, bot
-from app.core import Message
-from app.utils.downloader import Download, DownloadedFile
-from app.utils.helpers import progress
-from app.utils.media_helper import get_tg_media_details
+from ub_core.utils.downloader import Download, DownloadedFile
+from ub_core.utils.helpers import progress
+from ub_core.utils.media_helper import get_tg_media_details
+
+from app import BOT, Message, bot
 
 
 @bot.add_cmd(cmd="download")
@@ -30,7 +30,7 @@ async def down_load(bot: BOT, message: Message):
     file_name = None
     if message.replied and message.replied.media:
         if "-f" in message.flags:
-            file_name = message.flt_input
+            file_name = message.filtered_input
         download_coro = telegram_download(
             message=message.replied,
             response=response,
@@ -39,9 +39,9 @@ async def down_load(bot: BOT, message: Message):
         )
     else:
         if "-f" in message.flags:
-            file_name, url = message.flt_input.split(maxsplit=1)
+            file_name, url = message.filtered_input.split(maxsplit=1)
         else:
-            url = message.flt_input
+            url = message.filtered_input
         dl_obj: Download = await Download.setup(
             url=url, path=dl_path, message_to_edit=response, custom_file_name=file_name
         )

@@ -3,9 +3,9 @@ from collections import defaultdict
 
 from pyrogram import filters
 from pyrogram.enums import ChatType
+from ub_core.utils.helpers import get_name
 
-from app import BOT, Config, CustomDB, Message, bot
-from app.utils.helpers import get_name
+from app import BOT, CustomDB, Message, bot, extra_config
 
 PM_USERS = CustomDB("PM_USERS")
 
@@ -15,21 +15,22 @@ ALLOWED_USERS: list[int] = []
 
 allowed_filter = filters.create(lambda _, __, m: m.chat.id in ALLOWED_USERS)
 
-guard_check = filters.create(lambda _, __, ___: Config.PM_GUARD)
+guard_check = filters.create(lambda _, __, ___: extra_config.PM_GUARD)
 
 RECENT_USERS: dict = defaultdict(int)
 
 
 async def init_task():
     guard = (await PM_GUARD.find_one({"_id": "guard_switch"})) or {}
+    extra_config.PM_GUARD = guard.get("value", False)
     [ALLOWED_USERS.append(user_id["_id"]) async for user_id in PM_USERS.find()]
-    Config.PM_GUARD = guard.get("value", False)
 
 
 @bot.on_message(
     (guard_check & filters.private & filters.incoming)
     & (~allowed_filter & ~filters.bot)
-    & ~filters.chat(chats=[bot.me.id]),
+    & ~filters.chat(chats=[bot.me.id])
+    & ~filters.service,
     group=0,
 )
 async def handle_new_pm(bot: BOT, message: Message):
@@ -81,11 +82,11 @@ async def pmguard(bot: BOT, message: Message):
     """
     if "-c" in message.flags:
         await message.reply(
-            text=f"PM Guard is enabled: <b>{Config.PM_GUARD}</b>", del_in=8
+            text=f"PM Guard is enabled: <b>{extra_config.PM_GUARD}</b>", del_in=8
         )
         return
-    value = not Config.PM_GUARD
-    Config.PM_GUARD = value
+    value = not extra_config.PM_GUARD
+    extra_config.PM_GUARD = value
     await asyncio.gather(
         PM_GUARD.add_data({"_id": "guard_switch", "value": value}),
         message.reply(text=f"PM Guard is enabled: <b>{value}</b>!", del_in=8),
@@ -135,8 +136,8 @@ async def no_pm(bot: BOT, message: Message):
 
 
 def get_userID_name(message: Message) -> tuple:
-    if message.flt_input and message.flt_input.isdigit():
-        user_id = int(message.flt_input)
+    if message.filtered_input and message.filtered_input.isdigit():
+        user_id = int(message.filtered_input)
         return user_id, user_id
     elif message.replied:
         return message.replied.from_user.id, get_name(message.replied.from_user)

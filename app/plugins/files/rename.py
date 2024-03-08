@@ -3,12 +3,12 @@ import os
 import shutil
 import time
 
-from app import BOT, bot
-from app.core import Message
+from ub_core.utils.downloader import Download, DownloadedFile
+from ub_core.utils.helpers import progress
+
+from app import BOT, Message, bot
 from app.plugins.files.download import telegram_download
 from app.plugins.files.upload import FILE_TYPE_MAP
-from app.utils.downloader import Download, DownloadedFile
-from app.utils.helpers import progress
 
 
 @bot.add_cmd(cmd="rename")
@@ -20,9 +20,9 @@ async def rename(bot: BOT, message: Message):
     USAGE:
         .rename [ url | reply to message ] file_name.ext
     """
-    input = message.flt_input
+    input = message.filtered_input
     response = await message.reply("Checking input...")
-    if not message.replied or not message.replied.media or not message.flt_input:
+    if not message.replied or not message.replied.media or not message.filtered_input:
         await response.edit(
             "Invalid input...\nReply to a message containing media or give a link and a filename with cmd."
         )
