@@ -32,6 +32,7 @@ async def init_task():
     & ~filters.chat(chats=[bot.me.id])
     & ~filters.service,
     group=0,
+    is_command=False,
 )
 async def handle_new_pm(bot: BOT, message: Message):
     user_id = message.from_user.id
@@ -41,6 +42,10 @@ async def handle_new_pm(bot: BOT, message: Message):
             type="info",
         )
     RECENT_USERS[user_id] += 1
+
+    if message.chat.is_support:
+        return
+
     if RECENT_USERS[user_id] >= 5:
         await message.reply("You've been blocked for spamming.")
         await bot.block_user(user_id)
@@ -61,6 +66,7 @@ async def handle_new_pm(bot: BOT, message: Message):
     & (~allowed_filter & ~filters.bot)
     & ~filters.chat(chats=[bot.me.id]),
     group=2,
+    is_command=False,
 )
 async def auto_approve(bot: BOT, message: Message):
     message = Message.parse(message=message)
