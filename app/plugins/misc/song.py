@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from ub_core.utils import MediaExts, aio, run_shell_cmd
 
-from app import BOT, Message, bot
+from app import BOT, Message
 
 domains = [
     "www.youtube.com",
@@ -20,7 +20,7 @@ domains = [
 ]
 
 
-@bot.add_cmd(cmd="song")
+@BOT.add_cmd(cmd="song")
 async def song_dl(bot: BOT, message: Message) -> None | Message:
     reply_query = None
 
@@ -89,13 +89,10 @@ async def get_download_info(query: str, path: str):
         f"'{query}'"
     )
     try:
+        song_info = (await run_shell_cmd(download_cmd)).strip()
 
-        async with asyncio.timeout(30):
-
-            song_info = (await run_shell_cmd(download_cmd)).strip()
-
-            serialised_json = json.loads(song_info)
-            return serialised_json
+        serialised_json = json.loads(song_info)
+        return serialised_json
 
     except asyncio.TimeoutError:
         shutil.rmtree(path=path, ignore_errors=True)

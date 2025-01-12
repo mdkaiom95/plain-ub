@@ -2,65 +2,64 @@ import asyncio
 import glob
 import os
 import time
+from functools import partial
+from typing import Union
 
+from pyrogram.types import ReplyParameters
 from ub_core.utils import (
     Download,
     DownloadedFile,
     MediaType,
-    bytes_to_mb,
     check_audio,
     get_duration,
     progress,
     take_ss,
 )
 
-from app import BOT, Config, Message, bot
+from app import BOT, Config, Message
+
+UPLOAD_TYPES = Union[BOT.send_audio, BOT.send_document, BOT.send_photo, BOT.send_video]
 
 
-async def video_upload(file: DownloadedFile, has_spoiler: bool) -> dict[str, dict]:
-    thumb = await take_ss(file.full_path, path=file.path)
-    if not await check_audio(file.full_path):
-        return dict(
-            method=bot.send_animation,
-            kwargs=dict(
-                thumb=thumb,
-                unsave=True,
-                animation=file.full_path,
-                duration=await get_duration(file.full_path),
-                has_spoiler=has_spoiler,
-            ),
-        )
-    return dict(
-        method=bot.send_video,
-        kwargs=dict(
+async def video_upload(
+    bot: BOT, file: DownloadedFile, has_spoiler: bool
+) -> UPLOAD_TYPES:
+    thumb = await take_ss(file.path, path=file.path)
+    if not await check_audio(file.path):
+        return partial(
+            bot.send_animation,
             thumb=thumb,
-            video=file.full_path,
-            duration=await get_duration(file.full_path),
+            unsave=True,
+            animation=file.path,
+            duration=await get_duration(file.path),
             has_spoiler=has_spoiler,
-        ),
+        )
+    return partial(
+        bot.send_video,
+        thumb=thumb,
+        video=file.path,
+        duration=await get_duration(file.path),
+        has_spoiler=has_spoiler,
     )
 
 
-async def photo_upload(file: DownloadedFile, has_spoiler: bool) -> dict[str, dict]:
-    return dict(
-        method=bot.send_photo,
-        kwargs=dict(photo=file.full_path, has_spoiler=has_spoiler),
+async def photo_upload(
+    bot: BOT, file: DownloadedFile, has_spoiler: bool
+) -> UPLOAD_TYPES:
+    return partial(bot.send_photo, photo=file.path, has_spoiler=has_spoiler)
+
+
+async def audio_upload(bot: BOT, file: DownloadedFile, *_, **__) -> UPLOAD_TYPES:
+    return partial(
+        bot.send_audio,
+        audio=file.path,
+        duration=await get_duration(file=file.path),
     )
 
 
-async def audio_upload(file: DownloadedFile, has_spoiler: bool) -> dict[str, dict]:
-    return dict(
-        method=bot.send_audio,
-        kwargs=dict(
-            audio=file.full_path, duration=await get_duration(file=file.full_path)
-        ),
-    )
-
-
-async def doc_upload(file: DownloadedFile, has_spoiler: bool) -> dict[str, dict]:
-    return dict(
-        method=bot.send_document,
-        kwargs=dict(document=file.full_path, force_document=True),
+async def doc_upload(bot: BOT, file: DownloadedFile, *_, **__) -> UPLOAD_TYPES:
+    return partial(
+        bot.send_document, document=file.path, disable_content_type_detection=True
     )
 
 
@@ -73,16 +72,16 @@ FILE_TYPE_MAP = {
 }
 
 
-def file_check(file: str) -> bool:
+def file_exists(file: str) -> bool:
     return os.path.isfile(file)
 
 
-def check_size(size: int | float) -> bool:
-    limit = 3999 if bot.me.is_premium else 1999
-    return size < limit
+def size_over_limit(size: int | float, client: BOT) -> bool:
+    limit = 3999 if client.me.is_premium else 1999
+    return size > limit
 
 
-@bot.add_cmd(cmd="upload")
+@BOT.add_cmd(cmd="upload")
 async def upload(bot: BOT, message: Message):
     """
     CMD: UPLOAD
@@ -111,36 +110,39 @@ async def upload(bot: BOT, message: Message):
         await response.delete()
         return
 
-    elif input.startswith("http") and not file_check(input):
-
-        dl_obj: Download = await Download.setup(
-            url=input,
-            path=os.path.join("downloads", str(time.time())),
-            message_to_edit=response,
-        )
-
-        if not check_size(dl_obj.size):
-            await response.edit("<b>Aborted</b>, File size exceeds TG Limits!!!")
-            return
+    elif input.startswith("http") and not file_exists(input):
 
         try:
-            file: DownloadedFile = await dl_obj.download()
+            async with Download(
+                url=input,
+                dir=os.path.join("downloads", str(time.time())),
+                message_to_edit=response,
+            ) as dl_obj:
+                if size_over_limit(dl_obj.size, client=bot):
+                    await response.edit(
+                        "<b>Aborted</b>, File size exceeds TG Limits!!!"
+                    )
+                    return
+
+                await response.edit("URL detected in input, Starting Download....")
+                file: DownloadedFile = await dl_obj.download()
+
         except asyncio.exceptions.CancelledError:
             await response.edit("Cancelled...")
             return
+
         except TimeoutError:
             await response.edit("Download Timeout...")
             return
 
-    elif file_check(input):
-        file = DownloadedFile(
-            name=input,
-            path=os.path.dirname(input),
-            full_path=input,
-            size=bytes_to_mb(os.path.getsize(input)),
-        )
+        except Exception as e:
+            await response.edit(str(e))
+            return
 
-        if not check_size(file.size):
+    elif file_exists(input):
+        file = DownloadedFile(file=input)
+
+        if size_over_limit(file.size, client=bot):
             await response.edit("<b>Aborted</b>, File size exceeds TG Limits!!!")
             return
 
@@ -152,7 +154,7 @@ async def upload(bot: BOT, message: Message):
         await response.edit("invalid `cmd` | `url` | `file path`!!!")
         return
 
-    await response.edit("uploading....")
+    await response.edit("Uploading....")
     await upload_to_tg(file=file, message=message, response=response)
 
 
@@ -163,7 +165,7 @@ async def bulk_upload(message: Message, response: Message):
     else:
         path_regex = os.path.join(message.filtered_input, "*")
 
-    file_list = [f for f in glob.glob(path_regex) if file_check(f)]
+    file_list = [f for f in glob.glob(path_regex) if file_exists(f)]
 
     if not file_list:
         await response.edit("Invalid Folder path/regex or Folder Empty")
@@ -173,14 +175,9 @@ async def bulk_upload(message: Message, response: Message):
 
     for file in file_list:
 
-        file_info = DownloadedFile(
-            name=os.path.basename(file),
-            path=os.path.dirname(file),
-            full_path=file,
-            size=bytes_to_mb(os.path.getsize(file)),
-        )
+        file_info = DownloadedFile(file=file)
 
-        if not check_size(file_info.size):
+        if size_over_limit(file_info.size, client=message._client):
             await response.reply(
                 f"Skipping {file_info.name} due to size exceeding limit."
             )
@@ -196,28 +193,29 @@ async def bulk_upload(message: Message, response: Message):
 
 async def upload_to_tg(file: DownloadedFile, message: Message, response: Message):
 
-    progress_args = (response, "Uploading...", file.name, file.full_path)
+    progress_args = (response, "Uploading...", file.path)
 
     if "-d" in message.flags:
-        method_n_kwargs: dict = dict(
-            method=bot.send_document,
-            kwargs=dict(document=file.full_path, force_document=True),
+        upload_method = partial(
+            message._client.send_document,
+            document=file.path,
+            disable_content_type_detection=True,
         )
     else:
-        method_n_kwargs: dict = await FILE_TYPE_MAP[file.type](
-            file, has_spoiler="-s" in message.flags
+        upload_method: UPLOAD_TYPES = await FILE_TYPE_MAP[file.type](
+            bot=message._client, file=file, has_spoiler="-s" in message.flags
         )
 
     try:
-        await method_n_kwargs["method"](
+        await upload_method(
             chat_id=message.chat.id,
-            reply_to_message_id=message.reply_id,
+            reply_parameters=ReplyParameters(message_id=message.reply_id),
             progress=progress,
             progress_args=progress_args,
             caption=file.name,
-            **method_n_kwargs["kwargs"],
         )
         await response.delete()
+
     except asyncio.exceptions.CancelledError:
         await response.edit("Cancelled....")
         raise

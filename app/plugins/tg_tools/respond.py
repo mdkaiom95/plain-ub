@@ -1,9 +1,9 @@
 import re
 
-from app import BOT, Message, bot
+from app import BOT, Message
 
 
-@bot.add_cmd(cmd="resp")
+@BOT.add_cmd(cmd="resp")
 async def respond(bot: BOT, message: Message):
     """
     CMD: RESP
@@ -23,6 +23,4 @@ async def respond(bot: BOT, message: Message):
     else:
         await message.reply("Unable to extract chat_id and text.")
         return
-    await bot.send_message(
-        chat_id=int(chat_id), text=text, disable_web_page_preview=True
-    )
+    await bot.send_message(chat_id=int(chat_id), text=text, disable_preview=True)

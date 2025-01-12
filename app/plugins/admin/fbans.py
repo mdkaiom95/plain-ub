@@ -2,10 +2,13 @@ import asyncio
 
 from pyrogram import filters
 from pyrogram.enums import ChatMemberStatus, ChatType
+from pyrogram.errors import UserNotParticipant
 from pyrogram.types import Chat, User
 from ub_core.utils.helpers import get_name
 
 from app import BOT, Config, CustomDB, Message, bot, extra_config
+
+FBAN_TASK_LOCK = asyncio.Lock()
 
 FED_DB = CustomDB("FED_LIST")
 
@@ -53,14 +56,18 @@ async def remove_fed(bot: BOT, message: Message):
         await FED_DB.drop()
         await message.reply("FED LIST cleared.")
         return
+
     chat: int | str | Chat = message.input or message.chat
     name = ""
+
     if isinstance(chat, Chat):
         name = f"Chat: {chat.title}\n"
         chat = chat.id
     elif chat.lstrip("-").isdigit():
         chat = int(chat)
+
     deleted: int = await FED_DB.delete_data(id=chat)
+
     if deleted:
         text = f"#FBANS\n<b>{name}</b><code>{chat}</code> removed from FED LIST."
         await message.reply(text=text, del_in=8)
@@ -79,14 +86,19 @@ async def fed_list(bot: BOT, message: Message):
     """
     output: str = ""
     total = 0
+
     async for fed in FED_DB.find():
         output += f'<b>• {fed["name"]}</b>\n'
+
         if "-id" in message.flags:
             output += f'  <code>{fed["_id"]}</code>\n'
+
         total += 1
+
     if not total:
         await message.reply("You don't have any Feds Connected.")
         return
+
     output: str = f"List of <b>{total}</b> Connected Feds:\n\n{output}"
     await message.reply(output, del_in=30, block=True)
 
@@ -96,6 +108,7 @@ async def fed_ban(bot: BOT, message: Message):
     progress: Message = await message.reply("❯")
     extracted_info = await get_user_reason(message=message, progress=progress)
     if not extracted_info:
+        await progress.edit("Unable to extract user info.")
         return
 
     user_id, user_mention, reason = extracted_info
@@ -115,14 +128,17 @@ async def fed_ban(bot: BOT, message: Message):
     reason = f"{reason}{proof_str}"
 
     if message.replied and message.chat.type != ChatType.PRIVATE:
-        me = await bot.get_chat_member(chat_id=message.chat.id, user_id="me")
-        if me.status in {ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR}:
-            await message.replied.reply(
-                text=f"!dban {reason}",
-                disable_web_page_preview=True,
-                del_in=3,
-                block=False,
-            )
+        try:
+            me = await bot.get_chat_member(chat_id=message.chat.id, user_id="me")
+            if me.status in {ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR}:
+                await message.replied.reply(
+                    text=f"!dban {reason}",
+                    disable_preview=True,
+                    del_in=3,
+                    block=False,
+                )
+        except UserNotParticipant:
+            pass
 
     fban_cmd: str = f"/fban <a href='tg://user?id={user_id}'>{user_id}</a> {reason}"
 
@@ -144,6 +160,7 @@ async def un_fban(bot: BOT, message: Message):
     extracted_info = await get_user_reason(message=message, progress=progress)
 
     if not extracted_info:
+        await progress.edit("Unable to extract user info.")
         return
 
     user_id, user_mention, reason = extracted_info
@@ -177,7 +194,12 @@ async def get_user_reason(
     return user_id, user_mention, reason
 
 
-async def perform_fed_task(
+async def perform_fed_task(*args, **kwargs):
+    async with FBAN_TASK_LOCK:
+        await _perform_fed_task(*args, **kwargs)
+
+
+async def _perform_fed_task(
     user_id: int,
     user_mention: str,
     command: str,
@@ -188,54 +210,75 @@ async def perform_fed_task(
     message: Message,
 ):
     await progress.edit("❯❯")
+
     total: int = 0
     failed: list[str] = []
+
     async for fed in FED_DB.find():
         chat_id = int(fed["_id"])
         total += 1
-        cmd: Message = await bot.send_message(
-            chat_id=chat_id, text=command, disable_web_page_preview=True
-        )
-        response: Message | None = await cmd.get_response(
-            filters=task_filter, timeout=8
-        )
-        if not response:
+
+        try:
+            cmd: Message = await bot.send_message(
+                chat_id=chat_id, text=command, disable_preview=True
+            )
+            response: Message | None = await cmd.get_response(
+                filters=task_filter, timeout=8
+            )
+            if not response:
+                failed.append(fed["name"])
+            elif "Would you like to update this reason" in response.text:
+                await response.click("Update reason")
+
+        except Exception as e:
+            await bot.log_text(
+                text=f"An Error occured while banning in fed: {fed['name']} [{chat_id}]"
+                f"\nError: {e}",
+                type=task_type.upper(),
+            )
             failed.append(fed["name"])
-        elif "Would you like to update this reason" in response.text:
-            await response.click("Update reason")
+            continue
+
         await asyncio.sleep(1)
+
     if not total:
         await progress.edit("You Don't have any feds connected!")
         return
+
     resp_str = (
         f"❯❯❯ <b>{task_type}ned</b> {user_mention}"
         f"\n<b>ID</b>: {user_id}"
         f"\n<b>Reason</b>: {reason}"
         f"\n<b>Initiated in</b>: {message.chat.title or 'PM'}"
     )
+
     if failed:
         resp_str += f"\n<b>Failed</b> in: {len(failed)}/{total}\n• " + "\n• ".join(
             failed
         )
     else:
         resp_str += f"\n<b>Status</b>: {task_type}ned in <b>{total}</b> feds."
+
     if not message.is_from_owner:
         resp_str += f"\n\n<b>By</b>: {get_name(message.from_user)}"
+
     await bot.send_message(
         chat_id=extra_config.FBAN_LOG_CHANNEL,
         text=resp_str,
-        disable_web_page_preview=True,
+        disable_preview=True,
     )
-    await progress.edit(
-        text=resp_str, del_in=5, block=True, disable_web_page_preview=True
-    )
+
+    await progress.edit(text=resp_str, del_in=5, block=True, disable_preview=True)
+
     await handle_sudo_fban(command=command)
 
 
 async def handle_sudo_fban(command: str):
     if not (extra_config.FBAN_SUDO_ID and extra_config.FBAN_SUDO_TRIGGER):
         return
+
     sudo_cmd = command.replace("/", extra_config.FBAN_SUDO_TRIGGER, 1)
+
     await bot.send_message(
-        chat_id=extra_config.FBAN_SUDO_ID, text=sudo_cmd, disable_web_page_preview=True
+        chat_id=extra_config.FBAN_SUDO_ID, text=sudo_cmd, disable_preview=True
     )
